@@ -20,7 +20,7 @@ if sys.platform == "win32":
 # ⚙️ НАСТРОЙКИ С ВАШИМИ ДАННЫМИ
 # ==============================================================================
 BOT_TOKEN = "8967874463:AAGWcFYzNfZDHUXLR1ypKnb-ex9IvF8LrfU"
-ADMIN_CHAT_ID = 6905189590
+ADMIN_CHAT_ID = 8864323031
 
 PHONE_NUMBER = "+375336689966"
 INSTAGRAM_URL = "https://www.instagram.com/ppf.lab.by/"
