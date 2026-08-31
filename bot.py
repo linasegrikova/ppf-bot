@@ -12,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# 🚀 Оптимизация сетевого цикла
+# 🚀 Оптимизация сетевого цикла на Windows
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -20,7 +20,7 @@ if sys.platform == "win32":
 # ⚙️ НАСТРОЙКИ С ВАШИМИ ДАННЫМИ
 # ==============================================================================
 BOT_TOKEN = "8967874463:AAGWcFYzNfZDHUXLR1ypKnb-ex9IvF8LrfU"
-ADMIN_CHAT_ID = 8864323031
+ADMIN_CHAT_ID = 8864323031  # Ваш обновленный Telegram ID
 
 PHONE_NUMBER = "+375336689966"
 INSTAGRAM_URL = "https://www.instagram.com/ppf.lab.by/"
@@ -265,7 +265,6 @@ async def process_car_model(message: types.Message, state: FSMContext):
             else:
                 items_list_text += f"• {meta['name']} ({qty} шт): от {qty * meta['price']} BYN\n"
 
-    # Ответ клиенту
     client_response = (
         f"✅ **Предварительный расчёт сформирован!**\n\n"
         f"🚗 **Автомобиль:** {car_model}\n\n"
@@ -371,7 +370,7 @@ async def process_manager_message(message: types.Message, state: FSMContext):
 async def main():
     logging.basicConfig(level=logging.INFO)
     await bot.delete_webhook(drop_pending_updates=True)
-    # Запускаем веб-сервер для прохождения проверок Render
+    # Запускаем веб-сервер для проверок Render
     await start_web_server()
     print("🚀 Бот PPF.LAB успешно запущен в облаке 24/7!")
     await dp.start_polling(bot)
