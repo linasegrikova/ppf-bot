@@ -53,8 +53,9 @@ class Form(StatesGroup):
     waiting_car_model = State()
     waiting_manager_contact = State()
 
-# Сверхбыстрый оперативный кеш сессий калькулятора (0 мс)
+# Сверхбыстрый RAM-кеш сессий и очередь задач дебаунса
 user_calc_cache: dict[int, dict] = {}
+user_edit_tasks: dict[int, asyncio.Task] = {}
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -122,6 +123,23 @@ def get_calc_keyboard(selected_items: dict):
 
     return InlineKeyboardMarkup(inline_keyboard=buttons + control_buttons), total_price
 
+# Функция отложенной перерисовки клавиатуры (Дебаунс)
+async def debounced_edit_markup(message: types.Message, user_id: int):
+    # Небольшая пауза для группировки частых кликов (0.15 сек)
+    await asyncio.sleep(0.15)
+    selected = user_calc_cache.get(user_id, {})
+    kb, _ = get_calc_keyboard(selected)
+    try:
+        await message.edit_reply_markup(reply_markup=kb)
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        try:
+            await message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
 # ==============================================================================
 # 🚀 ХЕНДЛЕРЫ
 # ==============================================================================
@@ -145,8 +163,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+    user_id = callback.from_user.id
+    if user_id in user_edit_tasks and not user_edit_tasks[user_id].done():
+        user_edit_tasks[user_id].cancel()
+        
     await state.clear()
-    user_calc_cache.pop(callback.from_user.id, None)
+    user_calc_cache.pop(user_id, None)
     welcome_text = (
         f"👋 **Главное меню студии PPF.LAB**\n\n"
         f"Выберите интересующий вас раздел:"
@@ -180,7 +202,7 @@ async def show_contacts(callback: types.CallbackQuery):
         pass
 
 # ==============================================================================
-# 🧮 КАЛЬКУЛЯТОР ОКЛЕЙКИ (СВЕРХБЫСТРЫЙ RAM-ОТКЛИК)
+# 🧮 КАЛЬКУЛЯТОР ОКЛЕЙКИ С ДЕБАУНСОМ (ЗАЩИТА ОТ ТРОТТЛИНГА)
 # ==============================================================================
 @dp.callback_query(F.data == "start_calc")
 async def start_calc(callback: types.CallbackQuery, state: FSMContext):
@@ -205,7 +227,7 @@ async def start_calc(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(Form.calculating, F.data.startswith("toggle_"))
 async def toggle_calc_item(callback: types.CallbackQuery, state: FSMContext):
-    # Мгновенно снимаем визуальный отклик клика в Telegram
+    # 1. Мгновенно глушим анимацию клика в Telegram
     await callback.answer()
     
     user_id = callback.from_user.id
@@ -219,7 +241,7 @@ async def toggle_calc_item(callback: types.CallbackQuery, state: FSMContext):
     if not item_meta:
         return
 
-    # Мгновенный расчет в RAM
+    # 2. Мгновенное изменение в RAM-памяти (0 мс)
     if item_meta["type"] == "bool":
         selected[item_key] = 0 if selected.get(item_key, 0) > 0 else 1
     else:
@@ -227,23 +249,23 @@ async def toggle_calc_item(callback: types.CallbackQuery, state: FSMContext):
         max_qty = item_meta.get("max", 4)
         selected[item_key] = (current_qty + 1) if current_qty < max_qty else 0
 
-    kb, _ = get_calc_keyboard(selected)
+    # 3. Дебаунс: отменяем прошлый запрос, если пользователь быстро кликает дальше
+    if user_id in user_edit_tasks and not user_edit_tasks[user_id].done():
+        user_edit_tasks[user_id].cancel()
 
-    try:
-        await callback.message.edit_reply_markup(reply_markup=kb)
-    except TelegramRetryAfter as e:
-        await asyncio.sleep(e.retry_after)
-        await callback.message.edit_reply_markup(reply_markup=kb)
-    except TelegramBadRequest:
-        pass
-    except Exception:
-        pass
+    # Запускаем отложенную перерисовку (объединяет серию быстрых кликов)
+    user_edit_tasks[user_id] = asyncio.create_task(
+        debounced_edit_markup(callback.message, user_id)
+    )
 
 
 @dp.callback_query(Form.calculating, F.data == "reset_calc")
 async def reset_calc(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("Выбор сброшен")
     user_id = callback.from_user.id
+    if user_id in user_edit_tasks and not user_edit_tasks[user_id].done():
+        user_edit_tasks[user_id].cancel()
+
     user_calc_cache[user_id] = {}
     kb, _ = get_calc_keyboard({})
     try:
@@ -255,6 +277,9 @@ async def reset_calc(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(Form.calculating, F.data == "finish_calc")
 async def finish_calc_ask_car(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
+    if user_id in user_edit_tasks and not user_edit_tasks[user_id].done():
+        user_edit_tasks[user_id].cancel()
+
     selected = user_calc_cache.get(user_id, {})
     _, total = get_calc_keyboard(selected)
 
@@ -361,6 +386,10 @@ async def process_car_model(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "call_manager")
 async def ask_manager_contact(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+    user_id = callback.from_user.id
+    if user_id in user_edit_tasks and not user_edit_tasks[user_id].done():
+        user_edit_tasks[user_id].cancel()
+
     await state.set_state(Form.waiting_manager_contact)
     text = (
         f"👨‍💼 **Связь с мастером студии PPF.LAB**\n\n"
@@ -412,7 +441,7 @@ async def main():
     logging.basicConfig(level=logging.INFO)
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    print("🚀 Бот PPF.LAB успешно запущен и работает с быстрым RAM-откликом!")
+    print("🚀 Бот PPF.LAB успешно запущен с дебаунсом перерисовки!")
     await dp.start_polling(bot)
 
 
