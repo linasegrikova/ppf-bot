@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sys
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
@@ -11,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# 🚀 Ускорение сетевого цикла на Windows
+# 🚀 Оптимизация сетевого цикла
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -56,6 +57,22 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode="Markdown")
 )
 dp = Dispatcher(storage=MemoryStorage())
+
+# ==============================================================================
+# 🌐 МИКРО-СЕРВЕР ДЛЯ ПРОВЕРКИ RENDER (HEALTH CHECK)
+# ==============================================================================
+async def handle_ping(request):
+    return web.Response(text="PPF.LAB Bot is live and running 24/7!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"🌐 Фоновый веб-сервер проверки запущен на порту {port}!")
 
 # ==============================================================================
 # 🎛️ КЛАВИАТУРЫ
@@ -248,7 +265,7 @@ async def process_car_model(message: types.Message, state: FSMContext):
             else:
                 items_list_text += f"• {meta['name']} ({qty} шт): от {qty * meta['price']} BYN\n"
 
-    # Ответ клиенту с четким разъяснением ценообразования
+    # Ответ клиенту
     client_response = (
         f"✅ **Предварительный расчёт сформирован!**\n\n"
         f"🚗 **Автомобиль:** {car_model}\n\n"
@@ -349,12 +366,14 @@ async def process_manager_message(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ==============================================================================
-# 🏁 ЗАПУСК БОТА
+# 🏁 ЗАПУСК БОТА + ВЕБ-СЕРВЕРА
 # ==============================================================================
 async def main():
     logging.basicConfig(level=logging.INFO)
     await bot.delete_webhook(drop_pending_updates=True)
-    print("🚀 Бот PPF.LAB успешно запущен и работает без задержек!")
+    # Запускаем веб-сервер для прохождения проверок Render
+    await start_web_server()
+    print("🚀 Бот PPF.LAB успешно запущен в облаке 24/7!")
     await dp.start_polling(bot)
 
 
