@@ -6,6 +6,7 @@ import sys
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -20,7 +21,7 @@ if sys.platform == "win32":
 # ⚙️ НАСТРОЙКИ С ВАШИМИ ДАННЫМИ
 # ==============================================================================
 BOT_TOKEN = "8967874463:AAGWcFYzNfZDHUXLR1ypKnb-ex9IvF8LrfU"
-ADMIN_CHAT_ID = 8864323031  # Замените эти цифры на ваш НОВЫЙ Telegram ID
+ADMIN_CHAT_ID = 8864323031
 
 PHONE_NUMBER = "+375336689966"
 INSTAGRAM_URL = "https://www.instagram.com/ppf.lab.by/"
@@ -51,6 +52,9 @@ class Form(StatesGroup):
     calculating = State()
     waiting_car_model = State()
     waiting_manager_contact = State()
+
+# Сверхбыстрый оперативный кеш сессий калькулятора (0 мс)
+user_calc_cache: dict[int, dict] = {}
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -124,6 +128,7 @@ def get_calc_keyboard(selected_items: dict):
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
+    user_calc_cache.pop(message.from_user.id, None)
     welcome_text = (
         f"👋 **Приветствуем в студии PPF.LAB!**\n\n"
         f"🛡️ Профессиональная защита и стайлинг автомобилей "
@@ -141,11 +146,15 @@ async def cmd_start(message: types.Message, state: FSMContext):
 async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
+    user_calc_cache.pop(callback.from_user.id, None)
     welcome_text = (
         f"👋 **Главное меню студии PPF.LAB**\n\n"
         f"Выберите интересующий вас раздел:"
     )
-    await callback.message.edit_text(welcome_text, reply_markup=get_main_menu())
+    try:
+        await callback.message.edit_text(welcome_text, reply_markup=get_main_menu())
+    except Exception:
+        pass
 
 
 @dp.callback_query(F.data == "show_contacts")
@@ -165,19 +174,22 @@ async def show_contacts(callback: types.CallbackQuery):
             [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_to_main")],
         ]
     )
-    await callback.message.edit_text(contacts_text, reply_markup=kb, disable_web_page_preview=True)
+    try:
+        await callback.message.edit_text(contacts_text, reply_markup=kb, disable_web_page_preview=True)
+    except Exception:
+        pass
 
 # ==============================================================================
-# 🧮 КАЛЬКУЛЯТОР ОКЛЕЙКИ
+# 🧮 КАЛЬКУЛЯТОР ОКЛЕЙКИ (СВЕРХБЫСТРЫЙ RAM-ОТКЛИК)
 # ==============================================================================
 @dp.callback_query(F.data == "start_calc")
 async def start_calc(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(Form.calculating)
-    selected_items = {}
-    await state.update_data(selected_items=selected_items)
+    user_id = callback.from_user.id
+    user_calc_cache[user_id] = {}
 
-    kb, _ = get_calc_keyboard(selected_items)
+    kb, _ = get_calc_keyboard(user_calc_cache[user_id])
     calc_text = (
         f"💵 **Интерактивный калькулятор оклейки PPF.LAB**\n\n"
         f"Нажимайте на нужные элементы, чтобы собрать свой комплект защиты.\n"
@@ -185,20 +197,29 @@ async def start_calc(callback: types.CallbackQuery, state: FSMContext):
         f"ℹ️ *В калькуляторе указаны базовые минимальные цены («от»). Итоговая стоимость зависит от сложности геометрии кузова и выбранного бренда пленки.*\n\n"
         f"👇 **Выберите элементы кузова:**"
     )
-    await callback.message.edit_text(calc_text, reply_markup=kb)
+    try:
+        await callback.message.edit_text(calc_text, reply_markup=kb)
+    except Exception:
+        pass
 
 
 @dp.callback_query(Form.calculating, F.data.startswith("toggle_"))
 async def toggle_calc_item(callback: types.CallbackQuery, state: FSMContext):
+    # Мгновенно снимаем визуальный отклик клика в Telegram
     await callback.answer()
+    
+    user_id = callback.from_user.id
     item_key = callback.data.replace("toggle_", "")
-    data = await state.get_data()
-    selected = data.get("selected_items", {})
-
+    
+    if user_id not in user_calc_cache:
+        user_calc_cache[user_id] = {}
+        
+    selected = user_calc_cache[user_id]
     item_meta = PRICE_LIST.get(item_key)
     if not item_meta:
         return
 
+    # Мгновенный расчет в RAM
     if item_meta["type"] == "bool":
         selected[item_key] = 0 if selected.get(item_key, 0) > 0 else 1
     else:
@@ -206,11 +227,15 @@ async def toggle_calc_item(callback: types.CallbackQuery, state: FSMContext):
         max_qty = item_meta.get("max", 4)
         selected[item_key] = (current_qty + 1) if current_qty < max_qty else 0
 
-    await state.update_data(selected_items=selected)
     kb, _ = get_calc_keyboard(selected)
 
     try:
         await callback.message.edit_reply_markup(reply_markup=kb)
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        await callback.message.edit_reply_markup(reply_markup=kb)
+    except TelegramBadRequest:
+        pass
     except Exception:
         pass
 
@@ -218,7 +243,8 @@ async def toggle_calc_item(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(Form.calculating, F.data == "reset_calc")
 async def reset_calc(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer("Выбор сброшен")
-    await state.update_data(selected_items={})
+    user_id = callback.from_user.id
+    user_calc_cache[user_id] = {}
     kb, _ = get_calc_keyboard({})
     try:
         await callback.message.edit_reply_markup(reply_markup=kb)
@@ -228,8 +254,8 @@ async def reset_calc(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(Form.calculating, F.data == "finish_calc")
 async def finish_calc_ask_car(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    selected = data.get("selected_items", {})
+    user_id = callback.from_user.id
+    selected = user_calc_cache.get(user_id, {})
     _, total = get_calc_keyboard(selected)
 
     if total == 0:
@@ -237,6 +263,8 @@ async def finish_calc_ask_car(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.answer()
     await state.set_state(Form.waiting_car_model)
+    await state.update_data(selected_items=selected)
+
     ask_text = (
         f"🚗 **Почти готово!**\n\n"
         f"Предварительный ориентир: **от {total} BYN**\n\n"
@@ -246,14 +274,22 @@ async def finish_calc_ask_car(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="◀️ Вернуться к выбору", callback_data="start_calc")]]
     )
-    await callback.message.edit_text(ask_text, reply_markup=kb)
+    try:
+        await callback.message.edit_text(ask_text, reply_markup=kb)
+    except Exception:
+        pass
 
 
 @dp.message(Form.waiting_car_model)
 async def process_car_model(message: types.Message, state: FSMContext):
     car_model = message.text.strip()
-    data = await state.get_data()
-    selected = data.get("selected_items", {})
+    user_id = message.from_user.id
+    selected = user_calc_cache.get(user_id, {})
+    
+    if not selected:
+        data = await state.get_data()
+        selected = data.get("selected_items", {})
+        
     _, total = get_calc_keyboard(selected)
 
     items_list_text = ""
@@ -265,6 +301,7 @@ async def process_car_model(message: types.Message, state: FSMContext):
             else:
                 items_list_text += f"• {meta['name']} ({qty} шт): от {qty * meta['price']} BYN\n"
 
+    # Ответ клиенту
     client_response = (
         f"✅ **Предварительный расчёт сформирован!**\n\n"
         f"🚗 **Автомобиль:** {car_model}\n\n"
@@ -316,6 +353,7 @@ async def process_car_model(message: types.Message, state: FSMContext):
         logging.error(f"Ошибка отправки админу: {e}")
 
     await state.clear()
+    user_calc_cache.pop(user_id, None)
 
 # ==============================================================================
 # 👨‍💼 СВЯЗЬ С МАСТЕРОМ
@@ -332,7 +370,10 @@ async def ask_manager_contact(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="◀️ Отмена", callback_data="back_to_main")]]
     )
-    await callback.message.edit_text(text, reply_markup=kb)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
 
 
 @dp.message(Form.waiting_manager_contact)
@@ -370,9 +411,8 @@ async def process_manager_message(message: types.Message, state: FSMContext):
 async def main():
     logging.basicConfig(level=logging.INFO)
     await bot.delete_webhook(drop_pending_updates=True)
-    # Запускаем веб-сервер для проверок Render
     await start_web_server()
-    print("🚀 Бот PPF.LAB успешно запущен в облаке 24/7!")
+    print("🚀 Бот PPF.LAB успешно запущен и работает с быстрым RAM-откликом!")
     await dp.start_polling(bot)
 
 
