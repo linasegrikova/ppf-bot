@@ -59,7 +59,7 @@ user_calc_cache: dict[int, dict] = {}
 user_edit_tasks: dict[int, asyncio.Task] = {}
 
 bot = Bot(
-    token=BOT_TOKEN,
+    token=TOKEN,
     default=DefaultBotProperties(parse_mode="Markdown")
 )
 dp = Dispatcher(storage=MemoryStorage())
